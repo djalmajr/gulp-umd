@@ -3,10 +3,16 @@
     define(<%= amd %>, factory);
   } else if (typeof exports === 'object') {
     module.exports = factory(<%= cjs %>);
-  } else {
-    root.<%= namespace %> = factory(<%= global %>);
+  } else {<%
+    if (namespace) { %>
+    root.<%= namespace %> = factory(<%= global %>);<%
+    } else { %>
+    factory(<%= global %>);<%
+    } %>
   }
 }(this, function(<%= param %>) {
-<%= contents %>
-return <%= exports %>;
+<%= contents %><%
+if (exports) { %>
+return <%= exports %>;<%
+} %>
 }));

@@ -19,13 +19,17 @@ const defaultOptions = {
   template: (/*file*/) => path.join(__dirname, "templates", "returnExports.js")
 };
 
-const buildTemplate = (file, options) => {
+const buildTemplate = (file, contents, options) => {
   const amd = [];
   const cjs = [];
   const global = [];
   const param = [];
   const requires = [];
   const dependencies = options.dependencies(file);
+  const match = contents.match(/\/\*\s?global ([.\s\S]*?)\*\//m);
+  const deps = match && match[1].split(",").map(p => p.trim());
+
+  if (deps) dependencies.push(...deps);
 
   dependencies.forEach(dep => {
     if (typeof dep === "string") {
@@ -33,13 +37,15 @@ const buildTemplate = (file, options) => {
     }
 
     amd.push(`'${dep.amd || dep.name}'`);
-    cjs.push(`require('${dep.cjs || dep.name})')`);
+    cjs.push(`require('${dep.cjs || dep.name}')`);
     global.push(`root.${dep.global || dep.name}`);
     param.push(dep.param || dep.name);
     requires.push(`${dep.param || dep.name}=require('${dep.cjs || dep.name}')`);
   });
 
-  return {
+  return options.compiled({
+    file,
+    contents,
     dependencies,
     exports: options.exports(file),
     namespace: options.namespace(file),
@@ -50,32 +56,28 @@ const buildTemplate = (file, options) => {
     commaCjs: commaPrefix(cjs),
     commaGlobal: commaPrefix(global),
     commaParam: commaPrefix(param)
-  };
+  });
 };
 
-const wrap = (file, compiled, data) => {
-  data.file = file;
-
+const wrap = (file, options) => {
   if (file.isStream()) {
-    const contents = through();
+    const data = through();
 
     file.contents.pipe(
       concat({ encoding: "utf-8" }, stream => {
-        data.contents = stream;
-        contents.push(compiled(data));
-        contents.push(null);
+        data.push(...[buildTemplate(file, stream, options), null]);
       })
     );
 
-    file.contents = contents;
+    file.contents = data;
   } else if (file.isBuffer()) {
-    data.contents = file.contents.toString();
-    file.contents = Buffer.from(compiled(data));
+    const contents = file.contents.toString();
+    file.contents = Buffer.from(buildTemplate(file, contents, options));
   }
 };
 
-module.exports = options => {
-  options = Object.assign({}, defaultOptions, options);
+module.exports = opts => {
+  const options = { ...defaultOptions, ...opts };
 
   return through.obj((file, _enc, next) => {
     let err;
@@ -85,15 +87,15 @@ module.exports = options => {
       text = options.templateName(file);
       text === "amdNodeWeb" && (text = "returnExports");
       text = path.join(__dirname, "templates", `${text}.js`);
-      text = fs.readFileSync(text);
+      text = fs.readFileSync(text, "utf8");
     } else if (options.templateSource) {
       text = options.templateSource(file);
     } else {
-      text = fs.readFileSync(options.template(file));
+      text = fs.readFileSync(options.template(file), "utf8");
     }
 
     try {
-      wrap(file, template(text), buildTemplate(file, options));
+      wrap(file, { ...options, compiled: template(text) });
     } catch (e) {
       err = e;
     }
