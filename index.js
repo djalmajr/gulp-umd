@@ -3,11 +3,12 @@ const path = require("path");
 const concat = require("concat-stream");
 const through = require("through2");
 const template = require("lodash.template");
+const camelCase = require("lodash.camelcase");
 
 const commaPrefix = items => items.map(value => `, ${value}`).join("");
 
 const capitalize = file => {
-  const name = path.basename(file.path, path.extname(file.path));
+  const name = camelCase(path.basename(file.path, path.extname(file.path)));
   return name.charAt(0).toUpperCase() + name.substring(1);
 };
 
@@ -73,8 +74,6 @@ const wrap = (file, compiled, data) => {
   }
 };
 
-exports.capitalize = capitalize;
-
 module.exports = options => {
   options = Object.assign({}, defaultOptions, options);
 
@@ -102,3 +101,5 @@ module.exports = options => {
     next(err, file);
   });
 };
+
+module.exports.capitalize = capitalize;
