@@ -83,12 +83,12 @@ module.exports = options => {
     let text;
 
     if (options.templateName) {
-      text = options.templateName;
+      text = options.templateName(file);
       text === "amdNodeWeb" && (text = "returnExports");
       text = path.join(__dirname, "templates", `${text}.js`);
       text = fs.readFileSync(text);
     } else if (options.templateSource) {
-      text = options.templateSource;
+      text = options.templateSource(file);
     } else {
       text = fs.readFileSync(options.template(file));
     }
