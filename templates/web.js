@@ -1,4 +1,6 @@
-;(function () {
+;(function (root) {
 <%= contents %>
-this.<%= namespace %> = <%= exports %>;
-}).call(this);
+<% if (namespace && exports) { %>
+root.<%= namespace %> = <%= exports %>;
+<% } %>
+}(this));

@@ -1,129 +1,107 @@
-'use strict';
+const fs = require("fs");
+const path = require("path");
+const concat = require("concat-stream");
+const through = require("through2");
+const template = require("lodash.template");
+const camelCase = require("lodash.camelcase");
 
-var concat = require('concat-stream');
-var fs = require('fs');
-var path = require('path');
-var _template = require('lodash.template');
-var through = require('through2');
+const commaPrefix = items => items.map(value => `, ${value}`).join("");
 
-var defaultOptions = {
-  dependencies: function() {
-    return [];
-  },
-  exports: function(file) {
-    return capitalizeFilename(file);
-  },
-  namespace: function(file) {
-    return capitalizeFilename(file);
-  },
-  template: path.join(__dirname, 'templates', 'returnExports.js')
+const capitalize = file => {
+  const name = camelCase(path.basename(file.path, path.extname(file.path)));
+  return name.charAt(0).toUpperCase() + name.substring(1);
 };
 
-function umd(options) {
-  options = Object.assign({}, defaultOptions, options);
+const defaultOptions = {
+  dependencies: () => [],
+  exports: capitalize,
+  namespace: capitalize,
+  template: (/*file*/) => path.join(__dirname, "templates", "returnExports.js")
+};
 
-  var text;
+const buildTemplate = (file, contents, options) => {
+  const amd = [];
+  const cjs = [];
+  const global = [];
+  const param = [];
+  const requires = [];
+  const dependencies = options.dependencies(file);
+  const match = contents.match(/\/\*\s?global ([.\s\S]*?)\*\//m);
+  const deps = match && match[1].split(",").map(p => p.trim());
 
-  if(options.templateName) {
-    text = options.templateName;
-    if (text === 'amdNodeWeb') {
-      text = 'returnExports';
+  if (deps) dependencies.push(...deps);
+
+  dependencies.forEach(dep => {
+    if (typeof dep === "string") {
+      dep = { amd: dep, cjs: dep, global: dep, param: dep };
     }
-    text = path.join(__dirname, 'templates', text + '.js');
-    text = fs.readFileSync(text);
-  }
-  else if(options.templateSource) {
-    text = options.templateSource;
-  }
-  else {
-    text = fs.readFileSync(options.template);
-  }
 
-  var compiled = _template(text);
+    amd.push(`'${dep.amd || dep.name}'`);
+    cjs.push(`require('${dep.cjs || dep.name}')`);
+    global.push(`root.${dep.global || dep.name}`);
+    param.push(dep.param || dep.name);
+    requires.push(`${dep.param || dep.name}=require('${dep.cjs || dep.name}')`);
+  });
 
-  return through.obj(function(file, enc, next) {
-    var data;
-    var err;
+  return options.compiled({
+    file,
+    contents,
+    dependencies,
+    exports: options.exports(file),
+    namespace: options.namespace(file),
+    amd: `[${amd.join(", ")}]`,
+    cjs: cjs.join(", "),
+    global: global.join(", "),
+    param: param.join(", "),
+    commaCjs: commaPrefix(cjs),
+    commaGlobal: commaPrefix(global),
+    commaParam: commaPrefix(param)
+  });
+};
+
+const wrap = (file, options) => {
+  if (file.isStream()) {
+    const data = through();
+
+    file.contents.pipe(
+      concat({ encoding: "utf-8" }, stream => {
+        data.push(...[buildTemplate(file, stream, options), null]);
+      })
+    );
+
+    file.contents = data;
+  } else if (file.isBuffer()) {
+    const contents = file.contents.toString();
+    file.contents = Buffer.from(buildTemplate(file, contents, options));
+  }
+};
+
+module.exports = opts => {
+  const options = { ...defaultOptions, ...opts };
+
+  return through.obj((file, _enc, next) => {
+    let err;
+    let text;
+
+    if (options.templateName) {
+      text = options.templateName(file);
+      text === "amdNodeWeb" && (text = "returnExports");
+      text = path.join(__dirname, "templates", `${text}.js`);
+      text = fs.readFileSync(text, "utf8");
+    } else if (options.templateSource) {
+      text = options.templateSource(file);
+    } else {
+      text = fs.readFileSync(options.template(file), "utf8");
+    }
 
     try {
-      data = buildFileTemplateData(file, options);
-      wrap(file, compiled, data);
+      wrap(file, { ...options, compiled: template(text) });
     } catch (e) {
       err = e;
     }
 
     next(err, file);
   });
-}
+};
 
-function buildFileTemplateData(file, options) {
-  var amd = [];
-  var cjs = [];
-  var global = [];
-  var param = [];
-  var requires = [];
-  var dependencies = options.dependencies(file);
-  var commaPrefix;
-
-  dependencies.forEach(function(dep) {
-    if (typeof dep === 'string') {
-      dep = {
-        amd: dep,
-        cjs: dep,
-        global: dep,
-        param: dep
-      };
-    }
-    amd.push('\'' + (dep.amd || dep.name) + '\'');
-    cjs.push('require(\'' + (dep.cjs || dep.name) + '\')');
-    global.push('root.' + (dep.global || dep.name));
-    param.push(dep.param || dep.name);
-    requires.push((dep.param || dep.name) + '=require(\'' + (dep.cjs || dep.name) + '\')');
-  });
-
-  commaPrefix = function (items) {
-    return items.map(function (value) {
-      return ', ' + value;
-    }).join('');
-  };
-
-  return {
-    dependencies: dependencies,
-    exports: options.exports(file),
-    namespace: options.namespace(file),
-    // Adds resolved dependencies for each environment into the template data
-    amd: '[' + amd.join(', ') + ']',
-    cjs: cjs.join(', '),
-    commaCjs: commaPrefix(cjs),
-    global: global.join(', '),
-    commaGlobal: commaPrefix(global),
-    param: param.join(', '),
-    commaParam: commaPrefix(param)
-    // =======================================================================
-  };
-}
-
-function capitalizeFilename(file) {
-  var name = path.basename(file.path, path.extname(file.path));
-  return name.charAt(0).toUpperCase() + name.substring(1);
-}
-
-function wrap(file, template, data) {
-  data.file = file;
-
-  if (file.isStream()) {
-    var contents = through();
-
-    file.contents.pipe(concat({encoding: 'utf-8'}, function(s) {
-      data.contents = s;
-      contents.push(template(data));
-      contents.push(null);
-    }));
-    file.contents = contents;
-  } else if (file.isBuffer()) {
-    data.contents = file.contents.toString();
-    file.contents = Buffer.from(template(data));
-  }
-}
-
-module.exports = umd;
+module.exports.capitalize = capitalize;
